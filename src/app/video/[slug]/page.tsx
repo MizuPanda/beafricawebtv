@@ -1,8 +1,9 @@
+import { headers } from 'next/headers';
+import type { Metadata } from 'next';
 import { notFound } from 'next/navigation';
 import { sanityClient } from '../../../sanity/lib/sanity';
+import VideoBackButton from '@/components/VideoBackButton';
 import VideoPlayer from '@/components/VideoPlayer';
-import Link from 'next/link';
-import type { Metadata } from 'next';
 
 type VideoDoc = {
   title: string;
@@ -19,14 +20,15 @@ async function getVideo(slug: string) {
 }
 
 export async function generateMetadata(
-  { params }: { params: { slug: string } }
+  { params }: { params: { slug: string } },
 ): Promise<Metadata> {
   const video = await getVideo(params.slug);
   if (!video) return { title: 'Video not found' };
 
   const title = video.title;
   const description =
-    (video.description && video.description.slice(0, 160)) || 'Watch this video';
+    (video.description && video.description.slice(0, 160)) ||
+    'Watch this video';
 
   return {
     title,
@@ -36,20 +38,85 @@ export async function generateMetadata(
   };
 }
 
-export default async function Page({ params }: { params: { slug: string } }) {
+type PageProps = {
+  params: { slug: string };
+  searchParams?: Record<string, string | string[] | undefined>;
+};
+
+function sanitizeInternalPath(
+  value: string | null | undefined,
+): string | null {
+  if (!value || typeof value !== 'string') return null;
+
+  const trimmed = value.trim();
+  if (!trimmed.startsWith('/')) return null;
+  if (trimmed.startsWith('//')) return null;
+
+  return trimmed;
+}
+
+function pickBackPathFromQuery(
+  searchParams: PageProps['searchParams'],
+): string | null {
+  if (!searchParams) return null;
+
+  const candidateKeys = ['from', 'origin', 'ref', 'returnTo', 'redirect'];
+
+  for (const key of candidateKeys) {
+    const raw = searchParams[key];
+    const value = Array.isArray(raw) ? raw[0] : raw;
+    const path = sanitizeInternalPath(value);
+    if (path) return path;
+  }
+
+  return null;
+}
+
+function sanitizeRefererPath(
+  referer: string | null,
+  hostHeader: string | null,
+): string | null {
+  if (!referer || !hostHeader) return null;
+
+  const allowedHost = hostHeader.split(',')[0]?.trim();
+  if (!allowedHost) return null;
+
+  try {
+    const refererUrl = new URL(referer);
+    if (refererUrl.host !== allowedHost) return null;
+
+    return `${refererUrl.pathname}${refererUrl.search}${refererUrl.hash}`;
+  } catch {
+    return null;
+  }
+}
+
+export default async function Page({ params, searchParams }: PageProps) {
   const video = await getVideo(params.slug);
   if (!video) return notFound();
 
-  const date =
-    video.publishedAt
-      ? new Date(video.publishedAt).toLocaleDateString()
-      : undefined;
+  const headerList = headers();
+  const hostHeader =
+    headerList.get('x-forwarded-host') ?? headerList.get('host');
+  const refererPath = sanitizeRefererPath(
+    headerList.get('referer'),
+    hostHeader,
+  );
+  const queryBackPath = pickBackPathFromQuery(searchParams);
+
+  const date = video.publishedAt
+    ? new Date(video.publishedAt).toLocaleDateString()
+    : undefined;
 
   return (
     <main className="mx-auto max-w-5xl p-4 sm:p-6 space-y-6">
       <div className="flex items-center gap-3 text-sm">
-        <Link href="/" className="text-blue-600 underline">&larr; Back</Link>
-        {date && <span className="text-gray-500">• {date}</span>}
+        <VideoBackButton
+          className="text-blue-600 underline"
+          queryHref={queryBackPath}
+          referrerHref={refererPath}
+        />
+        {date && <span className="text-gray-500">| {date}</span>}
       </div>
 
       <h1 className="text-2xl sm:text-3xl font-semibold">{video.title}</h1>

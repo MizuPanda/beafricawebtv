@@ -9,7 +9,7 @@ The goal is independence: videos remain available even if the external platform 
 
 - **Video Catalog**
   - Browse all videos in a clean grid layout.
-  - Individual video pages with title, description, publish date, and tags.
+  - Individual video pages with title, description, and publish date.
   - Mobile-friendly, SEO-optimized pages.
 
 - **Video Playback**
