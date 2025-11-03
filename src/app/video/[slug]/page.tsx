@@ -20,9 +20,13 @@ async function getVideo(slug: string) {
 }
 
 export async function generateMetadata(
-  { params }: { params: { slug: string } },
+  { params }: Pick<PageProps, 'params'>,
 ): Promise<Metadata> {
-  const video = await getVideo(params.slug);
+  const resolvedParams = params ? await params : undefined;
+  const slug = resolvedParams?.slug;
+  if (!slug) return { title: 'Video not found' };
+
+  const video = await getVideo(slug);
   if (!video) return { title: 'Video not found' };
 
   const title = video.title;
@@ -39,8 +43,8 @@ export async function generateMetadata(
 }
 
 type PageProps = {
-  params: { slug: string };
-  searchParams?: Record<string, string | string[] | undefined>;
+  params?: Promise<{ slug: string }>;
+  searchParams?: Promise<Record<string, string | string[] | undefined>>;
 };
 
 function sanitizeInternalPath(
@@ -56,7 +60,7 @@ function sanitizeInternalPath(
 }
 
 function pickBackPathFromQuery(
-  searchParams: PageProps['searchParams'],
+  searchParams: Awaited<PageProps['searchParams']>,
 ): string | null {
   if (!searchParams) return null;
 
@@ -92,17 +96,24 @@ function sanitizeRefererPath(
 }
 
 export default async function Page({ params, searchParams }: PageProps) {
-  const video = await getVideo(params.slug);
+  const resolvedParams = params ? await params : undefined;
+  const slug = resolvedParams?.slug;
+  if (!slug) return notFound();
+
+  const resolvedSearchParams = searchParams ? await searchParams : undefined;
+
+  const video = await getVideo(slug);
   if (!video) return notFound();
 
-  const headerList = headers();
+  // 👇 headers() is async in your setup
+  const headerList = await headers();
   const hostHeader =
     headerList.get('x-forwarded-host') ?? headerList.get('host');
   const refererPath = sanitizeRefererPath(
     headerList.get('referer'),
     hostHeader,
   );
-  const queryBackPath = pickBackPathFromQuery(searchParams);
+  const queryBackPath = pickBackPathFromQuery(resolvedSearchParams);
 
   const date = video.publishedAt
     ? new Date(video.publishedAt).toLocaleDateString()
