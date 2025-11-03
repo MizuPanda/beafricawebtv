@@ -18,7 +18,7 @@ export const metadata: Metadata = {
     template: "%s | Beafrica WebTV",
   },
   description:
-    "Beafrica WebTV couvre l'actualite politique beninoise, les debats en direct et les echanges avec la diaspora.",
+    "Beafrica WebTV couvre l'actualité politique béninoise, les débats en direct et les échanges avec la diaspora.",
 };
 
 export default function RootLayout({
