@@ -1,6 +1,7 @@
 import { urlFor } from '@/sanity/lib/sanityImage';
 
 type VideoImageSource = {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   thumbnail?: any;
   streamPlaybackId?: string;
 };

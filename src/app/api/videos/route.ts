@@ -23,6 +23,7 @@ export async function GET(request: Request) {
       }`
     );
 
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const videos = rawVideos.map((video: any) => ({
       ...video,
       thumbnailUrl: getVideoThumbnailUrl(video),

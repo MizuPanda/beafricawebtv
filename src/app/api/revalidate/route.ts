@@ -10,6 +10,7 @@ export async function POST(req: Request) {
   }
 
   // Sanity can send various payload shapes; we try a few safe paths.
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   let body: any = {};
   try { body = await req.json(); } catch { /* ignore empty body */ }
 

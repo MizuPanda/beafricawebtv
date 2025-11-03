@@ -4,6 +4,7 @@ import { urlFor } from '../sanity/lib/sanityImage';
 type Props = {
   title: string;
   slug: string;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   thumbnail?: any;       // Sanity image
   streamId?: string;     // Cloudflare playbackId or UID
 };
