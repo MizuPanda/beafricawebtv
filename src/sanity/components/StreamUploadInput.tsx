@@ -365,7 +365,7 @@ export default function StreamUploadInput({value, onChange}: Props) {
         detail: 'Analyse du flux en cours…',
       })
 
-      const {id, duration, thumbnail} = await pollUntilReady(uid, payload => {
+      const {id, duration, thumbnail} = await pollUntilReady(uid ?? '', payload => {
         setUploadStatus(prev => {
           let normalized = Math.min(99, prev.progress + 1)
           const parts: string[] = []
