@@ -2,6 +2,7 @@
 
 import * as React from 'react'
 import {PatchEvent, set, unset} from 'sanity'
+import {DetailedError as TusDetailedError, Upload as TusUpload} from 'tus-js-client'
 
 type Props = {
   value?: string
@@ -9,7 +10,7 @@ type Props = {
   schemaType: unknown
 }
 
-type CreateUploadResponse = {uploadURL: string; uid: string}
+type CreateUploadResponse = {uploadURL: string; uid: string | null}
 
 type UploadStage = 'idle' | 'preparing' | 'uploading' | 'processing' | 'deleting' | 'complete' | 'error'
 
@@ -36,8 +37,25 @@ const initialStatus: UploadStatus = {
   detail: null,
 }
 
-async function createDirectUpload(): Promise<CreateUploadResponse> {
-  const res = await fetch('/api/stream/create-upload', {method: 'POST'})
+const UPLOAD_ABORT_ERROR = 'UPLOAD_ABORTED' as const
+
+type UploadWithProgressOptions = {
+  signal?: AbortSignal
+  onRegister?: (upload: TusUpload | null) => void
+}
+
+type CreateUploadPayload = {
+  filename: string
+  filetype: string | undefined
+  filesize: number
+}
+
+async function createDirectUpload(payload: CreateUploadPayload): Promise<CreateUploadResponse> {
+  const res = await fetch('/api/stream/create-upload', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify(payload),
+  })
   if (!res.ok) throw new Error('Impossible de créer une URL de téléversement direct.')
   return res.json()
 }
@@ -46,42 +64,114 @@ async function uploadWithProgress(
   uploadURL: string,
   file: File,
   onProgress: (percent: number | null) => void,
+  options?: UploadWithProgressOptions,
 ) {
-  const form = new FormData()
-  form.append('file', file, file.name)
+  const {signal, onRegister} = options ?? {}
 
   await new Promise<void>((resolve, reject) => {
-    const xhr = new XMLHttpRequest()
+    if (signal?.aborted) {
+      reject(new Error(UPLOAD_ABORT_ERROR))
+      return
+    }
 
-    xhr.upload.onprogress = event => {
-      if (!event.lengthComputable) {
-        onProgress(null)
-        return
+    let completed = false
+    let abortHandler: (() => void) | undefined
+
+    const finish = (callback: () => void) => {
+      if (completed) return
+      completed = true
+      if (abortHandler && signal) {
+        signal.removeEventListener('abort', abortHandler)
       }
-      const ratio = event.loaded / event.total
-      onProgress(Math.max(0, Math.min(100, Math.round(ratio * 100))))
+      abortHandler = undefined
+      onRegister?.(null)
+      callback()
     }
 
-    xhr.onerror = () => {
-      reject(new Error('Le téléversement vers Cloudflare a échoué (erreur réseau).'))
+    let upload: TusUpload
+    try {
+      upload = new TusUpload(file, {
+        uploadUrl: uploadURL,
+        uploadSize: file.size,
+        metadata: {
+          filename: file.name,
+          filetype: file.type || 'application/octet-stream',
+        },
+        storeFingerprintForResuming: false,
+        removeFingerprintOnSuccess: true,
+        onProgress(bytesUploaded, bytesTotal) {
+          if (!bytesTotal) {
+            onProgress(null)
+            return
+          }
+          const ratio = bytesUploaded / bytesTotal
+          onProgress(Math.max(0, Math.min(100, Math.round(ratio * 100))))
+        },
+        onSuccess() {
+          finish(resolve)
+        },
+        onError(error) {
+          finish(() => {
+            if (error instanceof TusDetailedError) {
+              const response = error.originalResponse
+              if (response) {
+                const status = response.getStatus()
+                const body = response.getBody()
+                let detail = body || error.message || 'Réponse invalide'
+
+                if (body) {
+                  try {
+                    const parsed = JSON.parse(body)
+                    if (parsed?.errors?.length) {
+                      detail = JSON.stringify(parsed.errors)
+                    } else if (parsed?.messages?.length) {
+                      detail = JSON.stringify(parsed.messages)
+                    }
+                  } catch {
+                    // ignore JSON parse errors, we fall back to raw body above
+                  }
+                }
+                reject(
+                  new Error(
+                    `Le téléversement vers Cloudflare a échoué (${status}) : ${detail}`,
+                  ),
+                )
+                return
+              }
+              reject(new Error('Le téléversement vers Cloudflare a échoué (erreur réseau).'))
+              return
+            }
+
+            if (error instanceof Error) {
+              reject(error)
+              return
+            }
+
+            reject(new Error('Le téléversement vers Cloudflare a échoué (erreur réseau).'))
+          })
+        },
+        retryDelays: [0, 1000, 3000, 5000],
+      })
+    } catch (error) {
+      onRegister?.(null)
+      reject(error instanceof Error ? error : new Error(String(error)))
+      return
     }
 
-    xhr.onload = () => {
-      if (xhr.status >= 200 && xhr.status < 300) {
-        resolve()
-      } else {
-        reject(
-          new Error(
-            `Le téléversement vers Cloudflare a échoué (${xhr.status}) : ${
-              xhr.responseText || xhr.statusText || 'Réponse invalide'
-            }`,
-          ),
-        )
-      }
+    onRegister?.(upload)
+
+    abortHandler = () => {
+      void upload.abort(true)
+      finish(() => {
+        reject(new Error(UPLOAD_ABORT_ERROR))
+      })
     }
 
-    xhr.open('POST', uploadURL, true)
-    xhr.send(form)
+    if (signal) {
+      signal.addEventListener('abort', abortHandler)
+    }
+
+    upload.start()
   })
 }
 
@@ -163,6 +253,9 @@ export default function StreamUploadInput({value, onChange}: Props) {
     {},
   )
 
+  const tusUploadRef = React.useRef<TusUpload | null>(null)
+  const abortControllerRef = React.useRef<AbortController | null>(null)
+
   const busy =
     status.stage === 'preparing' ||
     status.stage === 'uploading' ||
@@ -173,16 +266,38 @@ export default function StreamUploadInput({value, onChange}: Props) {
     setStatus(prev => (typeof next === 'function' ? (next as (p: UploadStatus) => UploadStatus)(prev) : next))
   }, [])
 
+  const abortCurrentUpload = React.useCallback(() => {
+    const controller = abortControllerRef.current
+    abortControllerRef.current = null
+    if (controller && !controller.signal.aborted) {
+      controller.abort()
+    }
+
+    const currentUpload = tusUploadRef.current
+    tusUploadRef.current = null
+    if (currentUpload) {
+      currentUpload.abort(true).catch(() => undefined)
+    }
+  }, [])
+
   const resetState = React.useCallback(() => {
+    abortCurrentUpload()
     setUploadStatus(initialStatus)
     setError(null)
     setMeta({})
-  }, [setUploadStatus])
+  }, [abortCurrentUpload, setUploadStatus])
+
+  React.useEffect(() => {
+    return () => {
+      abortCurrentUpload()
+    }
+  }, [abortCurrentUpload])
 
   async function handleFileChange(e: React.ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0]
     if (!file) return
 
+    abortCurrentUpload()
     setError(null)
     setUploadStatus({
       stage: 'preparing',
@@ -191,8 +306,15 @@ export default function StreamUploadInput({value, onChange}: Props) {
       detail: `Fichier sélectionné : ${file.name}`,
     })
 
+    const controller = new AbortController()
+    abortControllerRef.current = controller
+
     try {
-      const {uploadURL, uid} = await createDirectUpload()
+      const {uploadURL, uid} = await createDirectUpload({
+        filename: file.name,
+        filetype: file.type || 'application/octet-stream',
+        filesize: file.size,
+      })
 
       setUploadStatus({
         stage: 'uploading',
@@ -201,26 +323,40 @@ export default function StreamUploadInput({value, onChange}: Props) {
         detail: '0 %',
       })
 
-      await uploadWithProgress(uploadURL, file, percent => {
-        setUploadStatus(prev => {
-          if (typeof percent === 'number' && Number.isFinite(percent)) {
-            const normalized = Math.max(prev.progress, Math.min(90, Math.round(10 + percent * 0.8)))
+      await uploadWithProgress(
+        uploadURL,
+        file,
+        percent => {
+          setUploadStatus(prev => {
+            if (typeof percent === 'number' && Number.isFinite(percent)) {
+              const normalized = Math.max(prev.progress, Math.min(90, Math.round(10 + percent * 0.8)))
+              return {
+                stage: 'uploading',
+                progress: normalized,
+                message: 'Téléversement vers Cloudflare…',
+                detail: `${Math.round(percent)} %`,
+              }
+            }
+
             return {
               stage: 'uploading',
-              progress: normalized,
+              progress: Math.min(90, prev.progress + 1),
               message: 'Téléversement vers Cloudflare…',
-              detail: `${Math.round(percent)} %`,
+              detail: 'Calcul du volume transféré…',
             }
-          }
+          })
+        },
+        {
+          signal: controller.signal,
+          onRegister: upload => {
+            tusUploadRef.current = upload
+          },
+        },
+      )
 
-          return {
-            stage: 'uploading',
-            progress: Math.min(90, prev.progress + 1),
-            message: 'Téléversement vers Cloudflare…',
-            detail: 'Calcul du volume transféré…',
-          }
-        })
-      })
+      if (abortControllerRef.current === controller) {
+        abortControllerRef.current = null
+      }
 
       setUploadStatus({
         stage: 'processing',
@@ -259,7 +395,7 @@ export default function StreamUploadInput({value, onChange}: Props) {
       })
 
       if (!id) {
-        throw new Error('Cloudflare Stream n’a renvoyé aucun identifiant de lecture.')
+        throw new Error("Cloudflare Stream n'a renvoyé aucun identifiant de lecture.")
       }
 
       queueMicrotask(() => {
@@ -275,6 +411,16 @@ export default function StreamUploadInput({value, onChange}: Props) {
 
       setMeta({duration, thumbnail})
     } catch (err) {
+      if (abortControllerRef.current === controller) {
+        abortControllerRef.current = null
+      }
+
+      if (err instanceof Error && err.message === UPLOAD_ABORT_ERROR) {
+        resetState()
+        onChange(PatchEvent.from(unset()))
+        return
+      }
+
       console.error(err)
       setUploadStatus({
         stage: 'error',
@@ -290,6 +436,8 @@ export default function StreamUploadInput({value, onChange}: Props) {
   }
 
   async function clearValue() {
+    abortCurrentUpload()
+
     if (!value) {
       onChange(PatchEvent.from(unset()))
       resetState()
