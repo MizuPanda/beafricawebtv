@@ -8,6 +8,7 @@ type VideoPreview = {
   title: string;
   slug: { current: string };
   thumbnailUrl: string | null;
+  description?: string;
   streamPlaybackId?: string;
   publishedAt?: string;
 };

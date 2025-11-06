@@ -19,7 +19,13 @@ export async function GET(request: Request) {
   try {
     const rawVideos = await sanityClient.fetch(
       `*[_type == "video"] | order(coalesce(publishedAt, _createdAt) desc, _createdAt desc)[${offset}...${offset + limit - 1}]{
-        _id, title, slug, thumbnail, streamPlaybackId, publishedAt
+        _id,
+        title,
+        slug,
+        description,
+        thumbnail,
+        streamPlaybackId,
+        publishedAt
       }`
     );
 

@@ -4,19 +4,70 @@ import { notFound } from 'next/navigation';
 import { sanityClient } from '../../../sanity/lib/sanity';
 import VideoBackButton from '@/components/VideoBackButton';
 import VideoPlayer from '@/components/VideoPlayer';
+import VideoShareButton from '@/components/VideoShareButton';
+import { getVideoThumbnailUrl } from '@/utils/videoThumbnails';
+
+const FALLBACK_OPENGRAPH_IMAGE = '/images/channel-avatar.jpg';
+
+type HeaderList = Awaited<ReturnType<typeof headers>>;
 
 type VideoDoc = {
   title: string;
   description?: string;
   streamPlaybackId?: string;
   publishedAt?: string;
+  thumbnail?: unknown;
+  streamThumbnailUrl?: string;
 };
 
 async function getVideo(slug: string) {
   const query = `*[_type == "video" && slug.current == $slug][0]{
-    title, description, streamPlaybackId, publishedAt
+    title, description, streamPlaybackId, publishedAt, thumbnail, streamThumbnailUrl
   }`;
   return sanityClient.fetch<VideoDoc | null>(query, { slug });
+}
+
+function resolveBaseUrl(headerList: HeaderList): string | null {
+  const forwardedProto = headerList.get('x-forwarded-proto');
+  const proto = forwardedProto?.split(',')[0]?.trim() ?? 'https';
+  const host =
+    headerList.get('x-forwarded-host') ??
+    headerList.get('host') ??
+    process.env.VERCEL_URL ??
+    process.env.NEXT_PUBLIC_SITE_URL;
+
+  if (!host) return null;
+
+  const normalizedHost = host.startsWith('http') ? host : `${proto}://${host}`;
+  try {
+    const url = new URL(normalizedHost);
+    return url.origin;
+  } catch {
+    return null;
+  }
+}
+
+function resolveOgImageUrl(
+  video: VideoDoc,
+  headerList: HeaderList,
+): string | null {
+  const directThumbnail = getVideoThumbnailUrl(video);
+  if (directThumbnail) return directThumbnail;
+
+  const baseUrl = resolveBaseUrl(headerList);
+  if (!baseUrl) return null;
+
+  return new URL(FALLBACK_OPENGRAPH_IMAGE, baseUrl).toString();
+}
+
+function resolveCanonicalUrl(
+  slug: string,
+  headerList: HeaderList,
+): string | null {
+  const baseUrl = resolveBaseUrl(headerList);
+  if (!baseUrl) return null;
+
+  return new URL(`/video/${slug}`, baseUrl).toString();
 }
 
 export async function generateMetadata(
@@ -26,6 +77,8 @@ export async function generateMetadata(
   const slug = resolvedParams?.slug;
   if (!slug) return { title: 'Video not found' };
 
+  const headerList = await headers();
+
   const video = await getVideo(slug);
   if (!video) return { title: 'Video not found' };
 
@@ -33,12 +86,39 @@ export async function generateMetadata(
   const description =
     (video.description && video.description.slice(0, 160)) ||
     'Watch this video';
+  const ogImageUrl = resolveOgImageUrl(video, headerList);
+  const canonicalUrl = resolveCanonicalUrl(slug, headerList);
 
   return {
     title,
     description,
-    openGraph: { title, description, type: 'video.other' },
-    twitter: { card: 'summary_large_image', title, description },
+    alternates: canonicalUrl
+      ? {
+          canonical: canonicalUrl,
+        }
+      : undefined,
+    openGraph: {
+      title,
+      description,
+      type: 'video.other',
+      url: canonicalUrl ?? undefined,
+      images: ogImageUrl
+        ? [
+            {
+              url: ogImageUrl,
+              width: 1280,
+              height: 720,
+              alt: `${title} - Beafrica WebTV`,
+            },
+          ]
+        : undefined,
+    },
+    twitter: {
+      card: 'summary_large_image',
+      title,
+      description,
+      images: ogImageUrl ? [ogImageUrl] : undefined,
+    },
   };
 }
 
@@ -120,35 +200,44 @@ export default async function Page({ params, searchParams }: PageProps) {
     : undefined;
 
   return (
-    <main className="mx-auto max-w-5xl p-4 sm:p-6 space-y-6">
-      <div className="flex items-center gap-3 text-sm">
-        <VideoBackButton
-          className="text-blue-600 underline"
-          queryHref={queryBackPath}
-          referrerHref={refererPath}
-        />
-        {date && <span className="text-gray-500">| {date}</span>}
-      </div>
-
-      <h1 className="text-2xl sm:text-3xl font-semibold">{video.title}</h1>
-
-      {/* Player */}
-      {video.streamPlaybackId ? (
-        <div className="rounded-2xl overflow-hidden">
-          <VideoPlayer playbackId={video.streamPlaybackId} />
+    <main className="min-h-screen bg-slate-950 text-slate-100">
+      <div className="mx-auto max-w-5xl space-y-6 p-4 sm:p-6">
+        <div className="flex items-center gap-3 text-sm">
+          <VideoBackButton
+            className="text-blue-600 underline"
+            queryHref={queryBackPath}
+            referrerHref={refererPath}
+          />
+          {date && <span className="text-slate-300">| {date}</span>}
         </div>
-      ) : (
-        <p className="text-sm text-red-600">
-          No playback ID set for this video. Add one in the Studio.
-        </p>
-      )}
 
-      {/* Description */}
-      {video.description && (
-        <section className="prose prose-sm sm:prose-base max-w-none">
-          <p>{video.description}</p>
-        </section>
-      )}
+        <h1 className="text-2xl font-semibold sm:text-3xl">{video.title}</h1>
+
+        {/* Player */}
+        {video.streamPlaybackId ? (
+          <div className="overflow-hidden rounded-2xl">
+            <VideoPlayer playbackId={video.streamPlaybackId} />
+          </div>
+        ) : (
+          <p className="text-sm text-red-400">
+            No playback ID set for this video. Add one in the Studio.
+          </p>
+        )}
+
+        <VideoShareButton
+          title={video.title}
+          description={video.description}
+          path={`/video/${slug}`}
+          className="sm:flex-row sm:items-center sm:gap-3"
+        />
+
+        {/* Description */}
+        {video.description && (
+          <section className="prose prose-sm max-w-none text-slate-200 sm:prose-base">
+            <p className="break-words whitespace-pre-wrap">{video.description}</p>
+          </section>
+        )}
+      </div>
     </main>
   );
 }

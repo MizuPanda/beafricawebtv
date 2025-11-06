@@ -7,6 +7,7 @@ type VideoSanityItem = {
   _id: string;
   title: string;
   slug: { current: string };
+  description?: string;
   thumbnail?: unknown;
   streamPlaybackId?: string;
   publishedAt?: string;
@@ -118,7 +119,7 @@ export default async function Home() {
   }>(
     `{
       "videos": *[_type == "video"] | order(coalesce(publishedAt, _createdAt) desc, _createdAt desc)[0...${INITIAL_FETCH_LIMIT}]{
-        _id, title, slug, thumbnail, streamPlaybackId, publishedAt
+        _id, title, slug, description, thumbnail, streamPlaybackId, publishedAt
       },
       "total": count(*[_type == "video"])
     }`
