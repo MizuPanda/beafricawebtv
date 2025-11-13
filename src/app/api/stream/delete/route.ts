@@ -8,19 +8,20 @@ export async function POST(req: Request) {
     return NextResponse.json({error: 'Missing Cloudflare credentials'}, {status: 500})
   }
 
-  let id: unknown
+  let uid: unknown
   try {
     const body = await req.json()
-    id = body?.id ?? body?.uid ?? body?.playbackId
+    uid = body?.uid
   } catch {
     return NextResponse.json({error: 'Invalid JSON payload'}, {status: 400})
   }
 
-  if (typeof id !== 'string' || id.trim() === '') {
-    return NextResponse.json({error: 'Missing Cloudflare Stream identifier'}, {status: 400})
+  if (typeof uid !== 'string' || uid.trim() === '') {
+    return NextResponse.json({error: 'Missing Cloudflare Stream UID'}, {status: 400})
   }
 
-  const endpoint = `https://api.cloudflare.com/client/v4/accounts/${accountId}/stream/${id}`
+  const normalizedUid = uid.trim()
+  const endpoint = `https://api.cloudflare.com/client/v4/accounts/${accountId}/stream/${normalizedUid}`
   const res = await fetch(endpoint, {
     method: 'DELETE',
     headers: {

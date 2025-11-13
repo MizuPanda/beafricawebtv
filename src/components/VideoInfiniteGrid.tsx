@@ -9,7 +9,10 @@ type VideoPreview = {
   slug: { current: string };
   thumbnailUrl: string | null;
   description?: string;
-  streamPlaybackId?: string;
+  stream?: {
+    playbackId?: string | null;
+    thumbnailUrl?: string | null;
+  } | null;
   publishedAt?: string;
 };
 
@@ -144,8 +147,8 @@ export default function VideoInfiniteGrid({
         {videos.map(video => {
           const fallbackThumb =
             video.thumbnailUrl ??
-            (video.streamPlaybackId
-              ? `https://videodelivery.net/${video.streamPlaybackId}/thumbnails/thumbnail.jpg?height=360`
+            (video.stream?.playbackId
+              ? `https://videodelivery.net/${video.stream.playbackId}/thumbnails/thumbnail.jpg?height=360`
               : null);
 
           return (

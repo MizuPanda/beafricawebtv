@@ -10,7 +10,10 @@ type VideoSanityItem = {
   slug: { current: string };
   description?: string;
   thumbnail?: unknown;
-  streamPlaybackId?: string;
+  stream?: {
+    playbackId?: string | null;
+    thumbnailUrl?: string | null;
+  } | null;
   publishedAt?: string;
 };
 
@@ -30,9 +33,19 @@ export default async function VideosPage() {
     total: number;
   }>(
     `{
-      "videos": *[_type == "video"] | order(coalesce(publishedAt, _createdAt) desc, _createdAt desc)[0...${INITIAL_PAGE_SIZE - 1}]{
-        _id, title, slug, description, thumbnail, streamPlaybackId, publishedAt
-      },
+      "videos": *[_type == "video"] 
+        | order(coalesce(publishedAt, _createdAt) desc, _createdAt desc)[0...${INITIAL_PAGE_SIZE}]{
+          _id,
+          title,
+          slug,
+          description,
+          thumbnail,
+          stream {
+            playbackId,
+            thumbnailUrl
+          },
+          publishedAt
+        },
       "total": count(*[_type == "video"])
     }`
   );

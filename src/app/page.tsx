@@ -9,7 +9,10 @@ type VideoSanityItem = {
   slug: { current: string };
   description?: string;
   thumbnail?: unknown;
-  streamPlaybackId?: string;
+  stream?: {
+    playbackId?: string | null;
+    thumbnailUrl?: string | null;
+  } | null;
   publishedAt?: string;
 };
 
@@ -118,9 +121,19 @@ export default async function Home() {
     total: number;
   }>(
     `{
-      "videos": *[_type == "video"] | order(coalesce(publishedAt, _createdAt) desc, _createdAt desc)[0...${INITIAL_FETCH_LIMIT}]{
-        _id, title, slug, description, thumbnail, streamPlaybackId, publishedAt
-      },
+      "videos": *[_type == "video"] 
+        | order(coalesce(publishedAt, _createdAt) desc, _createdAt desc)[0...${INITIAL_FETCH_LIMIT}]{
+          _id,
+          title,
+          slug,
+          description,
+          thumbnail,
+          stream {
+            playbackId,
+            thumbnailUrl
+          },
+          publishedAt
+        },
       "total": count(*[_type == "video"])
     }`
   );
@@ -225,10 +238,14 @@ export default async function Home() {
             <>
               <div className="grid gap-6 sm:grid-cols-2 xl:grid-cols-3">
                 {previewVideos.map(video => {
+                  // getVideoThumbnailUrl already handles:
+                  // - manual Sanity thumbnail
+                  // - stream.thumbnailUrl
+                  // - stream.playbackId fallback
                   const fallbackThumb =
                     video.thumbnailUrl ??
-                    (video.streamPlaybackId
-                      ? `https://videodelivery.net/${video.streamPlaybackId}/thumbnails/thumbnail.jpg?height=360`
+                    (video.stream?.playbackId
+                      ? `https://videodelivery.net/${video.stream.playbackId}/thumbnails/thumbnail.jpg?height=360`
                       : null);
 
                   return (
@@ -252,7 +269,9 @@ export default async function Home() {
                         )}
                       </div>
                       <div className="p-3">
-                        <h3 className="text-base font-medium text-white line-clamp-2">{video.title}</h3>
+                        <h3 className="text-base font-medium text-white line-clamp-2">
+                          {video.title}
+                        </h3>
                       </div>
                     </Link>
                   );
@@ -325,7 +344,9 @@ export default async function Home() {
 
         <section className="space-y-6 rounded-3xl border border-white/10 bg-slate-900/70 p-8">
           <div className="space-y-2">
-            <h2 className="text-2xl font-semibold text-white sm:text-3xl">Communauté & contacts</h2>
+            <h2 className="text-2xl font-semibold text-white sm:text-3xl">
+              Communauté & contacts
+            </h2>
             <p className="text-sm text-slate-300">
               Rejoignez Beafrica WebTV sur vos plateformes préférées pour recevoir les alertes, participer aux directs et échanger avec la rédaction.
             </p>

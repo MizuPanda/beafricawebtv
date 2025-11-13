@@ -1,9 +1,11 @@
 import { urlFor } from '@/sanity/lib/sanityImage';
 
 type VideoImageSource = {
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  thumbnail?: any;
-  streamPlaybackId?: string;
+  thumbnail?: unknown; // Sanity image
+  stream?: {
+    playbackId?: string | null;
+    thumbnailUrl?: string | null;
+  } | null;
 };
 
 export const getVideoThumbnailUrl = (video?: VideoImageSource): string | null => {
@@ -19,8 +21,12 @@ export const getVideoThumbnailUrl = (video?: VideoImageSource): string | null =>
     return sanityThumb;
   }
 
-  if (video.streamPlaybackId) {
-    return `https://videodelivery.net/${video.streamPlaybackId}/thumbnails/thumbnail.jpg?height=720`;
+  if (video.stream?.thumbnailUrl) {
+    return video.stream.thumbnailUrl;
+  }
+
+  if (video.stream?.playbackId) {
+    return `https://videodelivery.net/${video.stream.playbackId}/thumbnails/thumbnail.jpg?height=720`;
   }
 
   return null;

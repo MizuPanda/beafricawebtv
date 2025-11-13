@@ -282,7 +282,7 @@ export default function VideoShareButton({
     if (nativeShareAvailable) {
       items.unshift({
         id: 'native',
-        label: 'Partager la video',
+        label: 'Partager la vidéo',
         action: handleNativeShare,
         icon: Share2Icon,
       });
@@ -345,7 +345,7 @@ export default function VideoShareButton({
           className={popoverClasses}
         >
           <div className="mb-2 text-xs uppercase tracking-wide text-slate-400">
-            Selectionnez une option
+            Sélectionnez une option
           </div>
 
           <div className="space-y-1">

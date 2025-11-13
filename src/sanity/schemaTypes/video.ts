@@ -36,25 +36,44 @@ export default defineType({
       initialValue: () => new Date().toISOString(),
     }),
     defineField({
-      name: 'streamPlaybackId',
-      type: 'string',
-      title: 'Identifiant de lecture Cloudflare Stream',
-      description: 'Renseigné automatiquement après téléversement.',
-      components: {input: StreamUploadInput},
-    }),
-    defineField({
-      name: 'duration',
-      type: 'number',
-      title: 'Durée (secondes)',
-      readOnly: true,
-      hidden: true,
-    }),
-    defineField({
-      name: 'streamThumbnailUrl',
-      type: 'url',
-      title: 'Miniature Cloudflare',
-      readOnly: true,
-      hidden: true,
+      name: 'stream',
+      title: 'Cloudflare Stream',
+      type: 'object',
+      description: 'Téléversement et métadonnées Cloudflare Stream.',
+      components: {
+        input: StreamUploadInput,
+      },
+      fields: [
+        defineField({
+          name: 'playbackId',
+          type: 'string',
+          title: 'Identifiant de lecture Cloudflare Stream',
+          readOnly: true,
+        }),
+        defineField({
+          name: 'uid',
+          type: 'string',
+          title: 'Identifiant Cloudflare Stream (UID)',
+          description:
+            'Identifiant interne utilisé pour les API Cloudflare (statut, suppression).',
+          readOnly: true,
+          hidden: true,
+        }),
+        defineField({
+          name: 'duration',
+          type: 'number',
+          title: 'Durée (secondes)',
+          readOnly: true,
+          hidden: true,
+        }),
+        defineField({
+          name: 'thumbnailUrl',
+          type: 'url',
+          title: 'Miniature Cloudflare',
+          readOnly: true,
+          hidden: true,
+        }),
+      ],
     }),
   ],
 })

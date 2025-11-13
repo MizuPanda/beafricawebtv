@@ -14,18 +14,32 @@ type HeaderList = Awaited<ReturnType<typeof headers>>;
 type VideoDoc = {
   title: string;
   description?: string;
-  streamPlaybackId?: string;
   publishedAt?: string;
   thumbnail?: unknown;
-  streamThumbnailUrl?: string;
+  stream?: {
+    playbackId?: string | null;
+    uid?: string | null;
+    duration?: number | null;
+    thumbnailUrl?: string | null;
+  } | null;
 };
 
 async function getVideo(slug: string) {
   const query = `*[_type == "video" && slug.current == $slug][0]{
-    title, description, streamPlaybackId, publishedAt, thumbnail, streamThumbnailUrl
+    title,
+    description,
+    publishedAt,
+    thumbnail,
+    stream {
+      playbackId,
+      uid,
+      duration,
+      thumbnailUrl
+    }
   }`;
   return sanityClient.fetch<VideoDoc | null>(query, { slug });
 }
+
 
 function resolveBaseUrl(headerList: HeaderList): string | null {
   const forwardedProto = headerList.get('x-forwarded-proto');
@@ -199,6 +213,8 @@ export default async function Page({ params, searchParams }: PageProps) {
     ? new Date(video.publishedAt).toLocaleDateString()
     : undefined;
 
+  const playbackId = video.stream?.playbackId ?? null;
+
   return (
     <main className="min-h-screen bg-slate-950 text-slate-100">
       <div className="mx-auto max-w-5xl space-y-6 p-4 sm:p-6">
@@ -214,13 +230,13 @@ export default async function Page({ params, searchParams }: PageProps) {
         <h1 className="text-2xl font-semibold sm:text-3xl">{video.title}</h1>
 
         {/* Player */}
-        {video.streamPlaybackId ? (
+        {playbackId ? (
           <div className="overflow-hidden rounded-2xl">
-            <VideoPlayer playbackId={video.streamPlaybackId} />
+            <VideoPlayer playbackId={playbackId} />
           </div>
         ) : (
-          <p className="text-sm text-red-400">
-            No playback ID set for this video. Add one in the Studio.
+        <p className="text-sm text-red-400">
+          No playback ID set for this video. Add one in the Studio.
           </p>
         )}
 

@@ -18,16 +18,19 @@ export async function GET(request: Request) {
 
   try {
     const rawVideos = await sanityClient.fetch(
-      `*[_type == "video"] | order(coalesce(publishedAt, _createdAt) desc, _createdAt desc)[${offset}...${offset + limit - 1}]{
-        _id,
-        title,
-        slug,
-        description,
-        thumbnail,
-        streamPlaybackId,
-        publishedAt
-      }`
-    );
+      `*[_type == "video"] | order(coalesce(publishedAt, _createdAt) desc, _createdAt desc)[${offset}...${offset + limit}]{
+      _id,
+      title,
+      slug,
+      description,
+      thumbnail,
+      stream {
+        playbackId,
+        thumbnailUrl
+      },
+      publishedAt
+    }`
+  );
 
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const videos = rawVideos.map((video: any) => ({

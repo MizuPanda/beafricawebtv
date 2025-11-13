@@ -1,14 +1,23 @@
 'use client'
 
 import * as React from 'react'
-import {PatchEvent, set, unset} from 'sanity'
+import {
+  PatchEvent,
+  set,
+  unset,
+  type ObjectInputProps,
+  type ObjectSchemaType,
+} from 'sanity'
 import {DetailedError as TusDetailedError, Upload as TusUpload} from 'tus-js-client'
 
-type Props = {
-  value?: string
-  onChange: (patchEvent: PatchEvent) => void
-  schemaType: unknown
+type StreamValue = {
+  playbackId?: string | null
+  uid?: string | null
+  duration?: number | null
+  thumbnailUrl?: string | null
 }
+
+type Props = ObjectInputProps<StreamValue, ObjectSchemaType>
 
 type CreateUploadResponse = {uploadURL: string; uid: string | null}
 
@@ -25,7 +34,8 @@ type ProcessingProgress = {
   status: string | null
   progress: number | null
   errorReason: string | null
-  id: string | null
+  playbackId: string | null
+  uid: string | null
   duration: number | null
   thumbnail: string | null
 }
@@ -39,6 +49,10 @@ const initialStatus: UploadStatus = {
 
 const UPLOAD_ABORT_ERROR = 'UPLOAD_ABORTED' as const
 
+const POLL_INTERVAL_MS = 4000
+const PROCESSING_TIMEOUT_MS = 5 * 60 * 1000
+const TUS_CHUNK_SIZE_BYTES = 10 * 1024 * 1024 // 10 MB chunks avoid single huge PATCH uploads
+
 type UploadWithProgressOptions = {
   signal?: AbortSignal
   onRegister?: (upload: TusUpload | null) => void
@@ -49,6 +63,8 @@ type CreateUploadPayload = {
   filetype: string | undefined
   filesize: number
 }
+
+const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms))
 
 async function createDirectUpload(payload: CreateUploadPayload): Promise<CreateUploadResponse> {
   const res = await fetch('/api/stream/create-upload', {
@@ -97,8 +113,9 @@ async function uploadWithProgress(
           filename: file.name,
           filetype: file.type || 'application/octet-stream',
         },
-        storeFingerprintForResuming: false,
+        storeFingerprintForResuming: true,
         removeFingerprintOnSuccess: true,
+        chunkSize: TUS_CHUNK_SIZE_BYTES,
         onProgress(bytesUploaded, bytesTotal) {
           if (!bytesTotal) {
             onProgress(null)
@@ -150,7 +167,7 @@ async function uploadWithProgress(
             reject(new Error('Le téléversement vers Cloudflare a échoué (erreur réseau).'))
           })
         },
-        retryDelays: [0, 1000, 3000, 5000],
+        retryDelays: [0, 2000, 5000, 10000],
       })
     } catch (error) {
       onRegister?.(null)
@@ -178,9 +195,15 @@ async function uploadWithProgress(
 async function pollUntilReady(
   uid: string,
   onProgress: (payload: ProcessingProgress) => void,
-): Promise<{id: string | null; duration: number | null; thumbnail: string | null}> {
+): Promise<{uid: string | null; playbackId: string; duration: number | null; thumbnail: string | null}> {
+  const startedAt = Date.now()
+
   for (;;) {
-    await new Promise(resolve => setTimeout(resolve, 4000))
+    if (Date.now() - startedAt > PROCESSING_TIMEOUT_MS) {
+      throw new Error('Cloudflare met trop de temps à finaliser la vidéo. Merci de réessayer.')
+    }
+
+    await sleep(POLL_INTERVAL_MS)
 
     const res = await fetch('/api/stream/status', {
       method: 'POST',
@@ -191,33 +214,43 @@ async function pollUntilReady(
 
     const data = await res.json()
     if (!res.ok) {
-      throw new Error(
-        `Impossible de récupérer le statut Cloudflare Stream : ${JSON.stringify(data)}`,
-      )
+      const label =
+        res.status === 504 || data?.timedOut
+          ? 'Cloudflare n’a pas retourné d’identifiant de lecture à temps.'
+          : 'Impossible de récupérer le statut Cloudflare Stream.'
+      throw new Error(`${label} ${JSON.stringify(data)}`)
     }
 
+    const playbackId =
+      typeof data.playbackId === 'string' && data.playbackId.trim() ? data.playbackId.trim() : null
     const payload: ProcessingProgress = {
       status: typeof data.status === 'string' ? data.status : null,
       progress: typeof data.progress === 'number' ? data.progress : null,
       errorReason: typeof data.errorReason === 'string' ? data.errorReason : null,
-      id: typeof data.playbackId === 'string' ? data.playbackId : typeof data.uid === 'string' ? data.uid : null,
+      playbackId,
+      uid: typeof data.uid === 'string' ? data.uid : null,
       duration: typeof data.duration === 'number' ? data.duration : null,
       thumbnail: typeof data.thumbnail === 'string' ? data.thumbnail : null,
     }
 
     onProgress(payload)
 
-    if ((data.readyToStream || data.status === 'ready') && payload.id) {
-      return {id: payload.id, duration: payload.duration, thumbnail: payload.thumbnail}
+    if (playbackId) {
+      return {
+        uid: payload.uid,
+        playbackId,
+        duration: payload.duration,
+        thumbnail: payload.thumbnail,
+      }
     }
   }
 }
 
-async function deleteStreamAsset(id: string) {
+async function deleteStreamAsset(uid: string) {
   const res = await fetch('/api/stream/delete', {
     method: 'POST',
     headers: {'Content-Type': 'application/json'},
-    body: JSON.stringify({id}),
+    body: JSON.stringify({uid}),
     cache: 'no-store',
   })
 
@@ -266,6 +299,15 @@ export default function StreamUploadInput({value, onChange}: Props) {
     setStatus(prev => (typeof next === 'function' ? (next as (p: UploadStatus) => UploadStatus)(prev) : next))
   }, [])
 
+  const clearStreamFields = React.useCallback(() => {
+    onChange(
+      PatchEvent.from([
+        unset(),
+        unset(['streamUid'])
+    ])
+    )
+  }, [onChange])
+
   const abortCurrentUpload = React.useCallback(() => {
     const controller = abortControllerRef.current
     abortControllerRef.current = null
@@ -294,32 +336,51 @@ export default function StreamUploadInput({value, onChange}: Props) {
   }, [abortCurrentUpload])
 
   async function handleFileChange(e: React.ChangeEvent<HTMLInputElement>) {
+
     const file = e.target.files?.[0]
+
     if (!file) return
 
     abortCurrentUpload()
+
     setError(null)
+
     setUploadStatus({
       stage: 'preparing',
+
       progress: 5,
-      message: 'Préparation du téléversement…',
+
+      message: 'Préparation du téleversement.',
+
       detail: `Fichier sélectionné : ${file.name}`,
     })
 
     const controller = new AbortController()
+
     abortControllerRef.current = controller
 
     try {
       const {uploadURL, uid} = await createDirectUpload({
+
         filename: file.name,
+
         filetype: file.type || 'application/octet-stream',
+
         filesize: file.size,
+
       })
+
+      if (!uid) {
+        throw new Error("Cloudflare n'a pas renvoyé d'UID pour ce téleversement.")
+      }
 
       setUploadStatus({
         stage: 'uploading',
+
         progress: 10,
-        message: 'Téléversement vers Cloudflare…',
+
+        message: 'Téléversement vers Cloudflare.',
+
         detail: '0 %',
       })
 
@@ -330,10 +391,11 @@ export default function StreamUploadInput({value, onChange}: Props) {
           setUploadStatus(prev => {
             if (typeof percent === 'number' && Number.isFinite(percent)) {
               const normalized = Math.max(prev.progress, Math.min(90, Math.round(10 + percent * 0.8)))
+              
               return {
                 stage: 'uploading',
                 progress: normalized,
-                message: 'Téléversement vers Cloudflare…',
+                message: 'Téléversement vers Cloudflare.',
                 detail: `${Math.round(percent)} %`,
               }
             }
@@ -341,8 +403,8 @@ export default function StreamUploadInput({value, onChange}: Props) {
             return {
               stage: 'uploading',
               progress: Math.min(90, prev.progress + 1),
-              message: 'Téléversement vers Cloudflare…',
-              detail: 'Calcul du volume transféré…',
+              message: 'Téléversement vers Cloudflare.',
+              detail: 'Calcul du volume transfère.',
             }
           })
         },
@@ -361,11 +423,17 @@ export default function StreamUploadInput({value, onChange}: Props) {
       setUploadStatus({
         stage: 'processing',
         progress: 90,
-        message: 'Traitement vidéo par Cloudflare…',
-        detail: 'Analyse du flux en cours…',
+        message: 'Traitement vidéo par Cloudflare (cela peut prendre quelques minutes).',
+        detail: 'Analyse du flux en cours.',
       })
 
-      const {id, duration, thumbnail} = await pollUntilReady(uid ?? '', payload => {
+      const {
+        uid: processedUid,
+        playbackId,
+        duration,
+        thumbnail,
+      } = await pollUntilReady(uid, payload => {
+
         setUploadStatus(prev => {
           let normalized = Math.min(99, prev.progress + 1)
           const parts: string[] = []
@@ -375,12 +443,14 @@ export default function StreamUploadInput({value, onChange}: Props) {
               prev.progress,
               Math.min(99, Math.round(90 + payload.progress * 0.09)),
             )
+
             parts.push(`${Math.round(payload.progress)} %`)
           }
 
           if (payload.status) {
-            parts.unshift(`Étape : ${payload.status}`)
+            parts.unshift(`Etape : ${payload.status}`)
           }
+
           if (payload.errorReason) {
             parts.push(`Alerte Cloudflare : ${payload.errorReason}`)
           }
@@ -388,25 +458,27 @@ export default function StreamUploadInput({value, onChange}: Props) {
           return {
             stage: 'processing',
             progress: normalized,
-            message: 'Traitement vidéo par Cloudflare…',
-            detail: parts.length > 0 ? parts.join(' · ') : prev.detail ?? null,
+            message: 'Traitement vidéo par Cloudflare (cela peut prendre quelques minutes).',
+            detail: parts.length > 0 ? parts.join(' | ') : prev.detail ?? null,
           }
         })
       })
 
-      if (!id) {
-        throw new Error("Cloudflare Stream n'a renvoyé aucun identifiant de lecture.")
-      }
-
       queueMicrotask(() => {
-        onChange(PatchEvent.from(set(id)))
+        const patches = [set(playbackId)]
+        const finalUid = processedUid ?? uid
+        if (finalUid) {
+          patches.push(set(finalUid, ['streamUid']))
+        }
+        const patchesObj = [...patches]
+        onChange(PatchEvent.from(patchesObj))
       })
 
       setUploadStatus({
         stage: 'complete',
         progress: 100,
-        message: 'Téléversement finalisé ✅',
-        detail: 'Identifiant Cloudflare enregistré dans Sanity.',
+        message: 'Téléversement finalisé !',
+        detail: 'Identifiants Cloudflare enregistrés dans Sanity.',
       })
 
       setMeta({duration, thumbnail})
@@ -417,19 +489,24 @@ export default function StreamUploadInput({value, onChange}: Props) {
 
       if (err instanceof Error && err.message === UPLOAD_ABORT_ERROR) {
         resetState()
-        onChange(PatchEvent.from(unset()))
+        clearStreamFields()
         return
       }
 
       console.error(err)
+
+      const detail = err instanceof Error ? err.message : String(err)
+
       setUploadStatus({
         stage: 'error',
         progress: 0,
         message: 'Le téléversement a échoué.',
-        detail: err instanceof Error ? err.message : String(err),
+        detail,
       })
-      setError(err instanceof Error ? err.message : String(err))
-      onChange(PatchEvent.from(unset()))
+
+      setError(detail)
+
+      clearStreamFields()
     } finally {
       e.target.value = ''
     }
@@ -438,34 +515,63 @@ export default function StreamUploadInput({value, onChange}: Props) {
   async function clearValue() {
     abortCurrentUpload()
 
-    if (!value) {
-      onChange(PatchEvent.from(unset()))
+    const storedUid =
+
+      typeof value?.uid === 'string' && value?.uid.trim() ? value?.uid.trim() : null
+
+    if (!value && !storedUid) {
+      clearStreamFields()
+
       resetState()
+
+      return
+    }
+
+    if (!storedUid) {
+      const message = "Impossible de trouver l'UID Cloudflare à supprimer."
+
+      setError(message)
+
+      setUploadStatus({
+        stage: 'error',
+        progress: 0,
+        message,
+        detail: 'Actualisez la page ou relancez le téléversement.',
+      })
+
       return
     }
 
     setError(null)
+
     setUploadStatus({
       stage: 'deleting',
       progress: 25,
-      message: 'Suppression du flux Cloudflare…',
-      detail: `Identifiant : ${value}`,
+      message: 'Suppression du flux Cloudflare.',
+      detail: `UID : ${storedUid}`,
     })
 
     try {
-      await deleteStreamAsset(value)
-      onChange(PatchEvent.from(unset()))
+      await deleteStreamAsset(storedUid)
+
+      clearStreamFields()
+
       setMeta({})
+
       setUploadStatus({
         stage: 'complete',
         progress: 100,
         message: 'Vidéo Cloudflare supprimée.',
         detail: null,
       })
+
     } catch (err) {
       console.error(err)
+
       const message = err instanceof Error ? err.message : String(err)
+
       setError(message)
+
       setUploadStatus({
         stage: 'error',
         progress: 0,
@@ -476,13 +582,14 @@ export default function StreamUploadInput({value, onChange}: Props) {
   }
 
   const formattedDuration = formatDuration(meta?.duration)
+  const playbackId = value?.playbackId ?? null
 
   return (
     <div style={{display: 'grid', gap: 12}}>
-      {value ? (
+      {playbackId ? (
         <div style={{display: 'grid', gap: 6}}>
           <div>
-            <strong>Identifiant de lecture :</strong> {value}
+            <strong>Identifiant de lecture :</strong> {playbackId}
           </div>
           <div style={{display: 'flex', gap: 8}}>
             <button type="button" onClick={clearValue} disabled={busy}>

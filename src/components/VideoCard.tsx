@@ -5,22 +5,25 @@ type Props = {
   title: string;
   slug: string;
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  thumbnail?: any;       // Sanity image
-  streamId?: string;     // Cloudflare playbackId or UID
+  thumbnail?: any; // Sanity image
+  stream?: {
+    playbackId?: string | null;
+    thumbnailUrl?: string | null;
+  } | null;
 };
 
-export default function VideoCard({ title, slug, thumbnail, streamId }: Props) {
+export default function VideoCard({ title, slug, thumbnail, stream }: Props) {
   const sanityUrl = thumbnail
-    ? urlFor(thumbnail).width(640).height(360).fit('crop').url()
+    ? urlFor(thumbnail).width(640).height(360).fit("crop").url()
     : null;
 
-  // Cloudflare public thumbnail endpoint (works with playbackId or UID)
-  // You can add width/height/time params if you want: ?height=360&time=1
-  const cfThumb = streamId
-    ? `https://videodelivery.net/${streamId}/thumbnails/thumbnail.jpg?height=360`
+  const cfStored = stream?.thumbnailUrl ?? null;
+
+  const cfFallback = stream?.playbackId
+    ? `https://videodelivery.net/${stream.playbackId}/thumbnails/thumbnail.jpg?height=360`
     : null;
 
-  const thumbUrl = sanityUrl || cfThumb || null;
+  const thumbUrl = sanityUrl || cfStored || cfFallback || null;
 
   return (
     <Link
